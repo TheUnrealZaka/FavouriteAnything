@@ -1,9 +1,11 @@
 import { logger } from "@vendetta";
-import { findByName } from "@vendetta/metro";
+import { findByProps } from "@vendetta/metro";
+import { before } from "@vendetta/patcher";
 
-// Reference to the original GIFFavButton component for cleanup
+// Cleanup references
 let origType: Function | null = null;
 let memoWrapper: any = null;
+let unpatchAddFavorite: (() => void) | null = null;
 
 /**
  * FavouriteAnything - Port of the Equicord plugin for Revenge (Discord Mobile)
@@ -13,7 +15,46 @@ let memoWrapper: any = null;
  * for media items with `isGIFV: true`. This plugin intercepts the component
  * and forces that flag on ALL media (images, videos), filling in any missing
  * fields that GIFFavButton needs to function properly.
+ *
+ * It also patches `addFavoriteGIF` to fix the format field:
+ * - Images are saved with format 1 (IMAGE) instead of 2 (VIDEO)
+ * - Videos keep format 2 (VIDEO) with a static jpeg thumbnail for mobile
+ *
+ * Format enum: 0 = NONE, 1 = IMAGE, 2 = VIDEO
  */
+
+// Video extensions — anything NOT matching these is treated as an image
+const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v", ".gifv"];
+
+function isVideoUrl(url: string): boolean {
+    if (!url) return false;
+    try {
+        const pathname = new URL(url).pathname.toLowerCase();
+        return VIDEO_EXTENSIONS.some(ext => pathname.endsWith(ext));
+    } catch {
+        const lower = url.toLowerCase().split("?")[0].split("#")[0];
+        return VIDEO_EXTENSIONS.some(ext => lower.endsWith(ext));
+    }
+}
+
+/**
+ * Generate a static jpeg thumbnail URL for a video using Discord's media proxy.
+ * This is needed because the mobile favourites picker uses an Image component
+ * which cannot render video files directly.
+ */
+function makeVideoThumbnail(url: string): string {
+    if (!url) return url;
+    try {
+        const u = new URL(url);
+        if (u.hostname.includes("media.discordapp.net") ||
+            u.hostname.includes("cdn.discordapp.com") ||
+            u.hostname.includes("images-ext")) {
+            u.searchParams.set("format", "jpeg");
+            return u.toString();
+        }
+    } catch { /* keep original */ }
+    return url;
+}
 
 function findGIFFavButton(): any {
     // findByName with false returns the module object (not just default export)
@@ -67,7 +108,7 @@ function patchSource(source: any): any {
         patched.videoURI = patched.uri;
     }
     if (!patched.embedProviderName) {
-        patched.embedProviderName = "Discord";
+        patched.embedProviderName = "";
     }
 
     return patched;
@@ -99,6 +140,37 @@ export default {
         // Preserve displayName for React DevTools
         (memoWrapper.type as any).displayName = "GIFFavButton";
 
+        // Patch addFavoriteGIF to fix format and thumbnails
+        // Uses `before` to modify args BEFORE the function executes
+        // Inverted detection: if NOT a video URL → must be an image (handles extensionless URLs)
+        const favModule = findByProps("addFavoriteGIF");
+        if (favModule) {
+            unpatchAddFavorite = before("addFavoriteGIF", favModule, (args: any[]) => {
+                const data = args[0];
+                if (data && typeof data === "object") {
+                    const url = data.url || "";
+                    const src = data.src || "";
+
+                    if (isVideoUrl(url) || isVideoUrl(src)) {
+                        // It's a video — keep format 2, add jpeg thumbnail for mobile
+                        data.format = 2;
+                        const thumb = makeVideoThumbnail(src || url);
+                        if (thumb !== (src || url)) {
+                            data.src = thumb;
+                        }
+                    } else {
+                        // Not a video → image — fix format to 1
+                        if (data.format === 2) {
+                            data.format = 1;
+                        }
+                    }
+                }
+            });
+            logger.log("[FavouriteAnything] addFavoriteGIF patched (before) for format correction.");
+        } else {
+            logger.warn("[FavouriteAnything] addFavoriteGIF module not found — format correction disabled.");
+        }
+
         logger.log("[FavouriteAnything] Loaded! ⭐ Favourite button enabled for all media.");
     },
     onUnload: () => {
@@ -107,7 +179,14 @@ export default {
             memoWrapper.type = origType;
             origType = null;
             memoWrapper = null;
-            logger.log("[FavouriteAnything] Unloaded. Original GIFFavButton restored.");
         }
+
+        // Unpatch addFavoriteGIF
+        if (unpatchAddFavorite) {
+            unpatchAddFavorite();
+            unpatchAddFavorite = null;
+        }
+
+        logger.log("[FavouriteAnything] Unloaded. All patches restored.");
     },
 };
