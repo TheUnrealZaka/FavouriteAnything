@@ -45,5 +45,7 @@ jobs:
               with:
                   github_token: ${{ secrets.GITHUB_TOKEN }}
                   publish_dir: ./dist
-                  enable_jekyll: false
-                  force_orphan: true
+                  # Makes it so the md files in the previous step get processed by GitHub Pages
+                  enable_jekyll: true
+                  # This creates the CNAME file required to host GitHub Pages on a custom domain
+                  # cname: example.com
