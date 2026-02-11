@@ -1,7 +1,8 @@
 // FavouriteAnything - by @TheUnrealZaka
 // Ported from the Equicord desktop plugin (nin0dev & davri)
 // Patches GIFFavButton so the star shows on all media, not just GIFs.
-// Also fixes the format field when saving (images=1, videos=2).
+// Also fixes the format field when saving (images=1, videos=2)
+// and converts video thumbnails to jpeg for the mobile favourites picker.
 
 import { logger } from "@vendetta";
 import { findByProps } from "@vendetta/metro";
@@ -11,6 +12,8 @@ let origType: Function | null = null;
 let memoWrapper: any = null;
 let retryTimeout: ReturnType<typeof setTimeout> | null = null;
 let unpatchAddFavorite: (() => void) | null = null;
+let origUseFavoriteGIFsMobile: Function | null = null;
+let favMobileModule: any = null;
 
 const VIDEO_EXT = [".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v", ".gifv"];
 
@@ -23,6 +26,7 @@ function isVideo(url: string): boolean {
     }
 }
 
+// cdn.discordapp.com doesn't support ?format=, media.discordapp.net does
 function makeVideoThumbnail(url: string): string {
     if (!url) return url;
     try {
@@ -91,12 +95,32 @@ function patchAddFavorite() {
 
         if (isVideo(url) || isVideo(src)) {
             data.format = 2;
-            const thumb = makeVideoThumbnail(src || url);
-            if (thumb !== (src || url)) data.src = thumb;
         } else if (data.format === 2) {
             data.format = 1;
         }
     });
+}
+
+function patchMobileFavorites() {
+    const mod = findByProps("useFavoriteGIFsMobile");
+    if (!mod) return;
+
+    favMobileModule = mod;
+    origUseFavoriteGIFsMobile = mod.useFavoriteGIFsMobile;
+
+    mod.useFavoriteGIFsMobile = function (...args: any[]) {
+        const result = (origUseFavoriteGIFsMobile as Function).apply(this, args);
+        if (result?.favorites && Array.isArray(result.favorites)) {
+            result.favorites = result.favorites.map((item: any) => {
+                if (!item) return item;
+                if (isVideo(item.url) || isVideo(item.src)) {
+                    return { ...item, src: makeVideoThumbnail(item.src || item.url) };
+                }
+                return item;
+            });
+        }
+        return result;
+    };
 }
 
 export default {
@@ -119,6 +143,7 @@ export default {
         }
 
         patchAddFavorite();
+        patchMobileFavorites();
     },
     onUnload: () => {
         if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
@@ -128,5 +153,10 @@ export default {
             memoWrapper = null;
         }
         if (unpatchAddFavorite) { unpatchAddFavorite(); unpatchAddFavorite = null; }
+        if (favMobileModule && origUseFavoriteGIFsMobile) {
+            favMobileModule.useFavoriteGIFsMobile = origUseFavoriteGIFsMobile;
+            origUseFavoriteGIFsMobile = null;
+            favMobileModule = null;
+        }
     },
 };
