@@ -1,3 +1,6 @@
+// FavouriteAnything - by @TheUnrealZaka
+// Ported from the Equicord desktop plugin (nin0dev & davri)
+
 import { logger } from "@vendetta";
 
 let origType: Function | null = null;
@@ -63,7 +66,6 @@ export default {
         if (applyPatch()) {
             logger.log("[FavouriteAnything] Patched GIFFavButton.");
         } else {
-            // Module not loaded yet, retry until found
             let retries = 0;
             const tryPatch = () => {
                 if (applyPatch()) {
