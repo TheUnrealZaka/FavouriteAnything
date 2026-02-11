@@ -7,6 +7,7 @@ let memoWrapper: any = null;
 
 /**
  * FavouriteAnything - Port of the Equicord plugin for Revenge (Discord Mobile)
+ * By @TheUnrealZaka
  *
  * Discord Mobile's GIFFavButton component only renders the favourite star
  * for media items with `isGIFV: true`. This plugin intercepts the component
