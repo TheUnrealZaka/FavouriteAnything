@@ -6,19 +6,18 @@ import { before } from "@vendetta/patcher";
 let origType: Function | null = null;
 let memoWrapper: any = null;
 let unpatchAddFavorite: (() => void) | null = null;
+let origUseFavoriteGIFsMobile: Function | null = null;
+let favMobileModule: any = null;
 
 /**
  * FavouriteAnything - Port of the Equicord plugin for Revenge (Discord Mobile)
  * By @TheUnrealZaka
  *
- * Discord Mobile's GIFFavButton component only renders the favourite star
- * for media items with `isGIFV: true`. This plugin intercepts the component
- * and forces that flag on ALL media (images, videos), filling in any missing
- * fields that GIFFavButton needs to function properly.
- *
- * It also patches `addFavoriteGIF` to fix the format field:
- * - Images are saved with format 1 (IMAGE) instead of 2 (VIDEO)
- * - Videos keep format 2 (VIDEO) with a static jpeg thumbnail for mobile
+ * Three patches:
+ * 1. GIFFavButton: Forces `isGIFV: true` so the star button renders for ALL media
+ * 2. addFavoriteGIF (before): Fixes format field — images get format 1, videos get format 2
+ * 3. useFavoriteGIFsMobile: Converts video src URLs to jpeg thumbnails for the
+ *    mobile favourites picker (visual only, does not modify saved data)
  *
  * Format enum: 0 = NONE, 1 = IMAGE, 2 = VIDEO
  */
@@ -38,17 +37,19 @@ function isVideoUrl(url: string): boolean {
 }
 
 /**
- * Generate a static jpeg thumbnail URL for a video using Discord's media proxy.
- * This is needed because the mobile favourites picker uses an Image component
- * which cannot render video files directly.
+ * Convert a Discord video URL to a static jpeg thumbnail via the media proxy.
+ * Converts cdn.discordapp.com → media.discordapp.net (which supports format conversion).
+ * Used only for mobile rendering — saved data is NOT modified.
  */
 function makeVideoThumbnail(url: string): string {
     if (!url) return url;
     try {
         const u = new URL(url);
-        if (u.hostname.includes("media.discordapp.net") ||
-            u.hostname.includes("cdn.discordapp.com") ||
-            u.hostname.includes("images-ext")) {
+        // cdn doesn't support ?format=, but media proxy does
+        if (u.hostname === "cdn.discordapp.com") {
+            u.hostname = "media.discordapp.net";
+        }
+        if (u.hostname.includes("media.discordapp.net") || u.hostname.includes("images-ext")) {
             u.searchParams.set("format", "jpeg");
             return u.toString();
         }
@@ -152,12 +153,8 @@ export default {
                     const src = data.src || "";
 
                     if (isVideoUrl(url) || isVideoUrl(src)) {
-                        // It's a video — keep format 2, add jpeg thumbnail for mobile
+                        // It's a video — keep format 2
                         data.format = 2;
-                        const thumb = makeVideoThumbnail(src || url);
-                        if (thumb !== (src || url)) {
-                            data.src = thumb;
-                        }
                     } else {
                         // Not a video → image — fix format to 1
                         if (data.format === 2) {
@@ -169,6 +166,36 @@ export default {
             logger.log("[FavouriteAnything] addFavoriteGIF patched (before) for format correction.");
         } else {
             logger.warn("[FavouriteAnything] addFavoriteGIF module not found — format correction disabled.");
+        }
+
+        // Patch useFavoriteGIFsMobile to show jpeg thumbnails for videos
+        // The mobile picker uses an Image component that can't render .mp4 files,
+        // so we convert video src to ?format=jpeg via Discord's media proxy.
+        // This is visual-only — the saved favourite data stays unchanged.
+        const favMobileMod = findByProps("useFavoriteGIFsMobile");
+        if (favMobileMod) {
+            favMobileModule = favMobileMod;
+            origUseFavoriteGIFsMobile = favMobileMod.useFavoriteGIFsMobile;
+
+            favMobileMod.useFavoriteGIFsMobile = function (...args: any[]) {
+                const result = (origUseFavoriteGIFsMobile as Function).apply(this, args);
+
+                if (result && Array.isArray(result.favorites)) {
+                    result.favorites = result.favorites.map((item: any) => {
+                        if (!item) return item;
+                        if (isVideoUrl(item.url) || isVideoUrl(item.src)) {
+                            return { ...item, src: makeVideoThumbnail(item.src || item.url) };
+                        }
+                        return item;
+                    });
+                }
+
+                return result;
+            };
+
+            logger.log("[FavouriteAnything] useFavoriteGIFsMobile patched for video thumbnails.");
+        } else {
+            logger.warn("[FavouriteAnything] useFavoriteGIFsMobile not found — video thumbnails may not show.");
         }
 
         logger.log("[FavouriteAnything] Loaded! ⭐ Favourite button enabled for all media.");
@@ -185,6 +212,13 @@ export default {
         if (unpatchAddFavorite) {
             unpatchAddFavorite();
             unpatchAddFavorite = null;
+        }
+
+        // Restore useFavoriteGIFsMobile
+        if (favMobileModule && origUseFavoriteGIFsMobile) {
+            favMobileModule.useFavoriteGIFsMobile = origUseFavoriteGIFsMobile;
+            origUseFavoriteGIFsMobile = null;
+            favMobileModule = null;
         }
 
         logger.log("[FavouriteAnything] Unloaded. All patches restored.");
