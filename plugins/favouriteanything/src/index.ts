@@ -16,6 +16,7 @@ let origUseFavoriteGIFsMobile: Function | null = null;
 let favMobileModule: any = null;
 
 const VIDEO_EXT = [".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v", ".gifv"];
+const thumbCache = new Map<string, string>();
 
 function isVideo(url: string): boolean {
     if (!url) return false;
@@ -29,12 +30,16 @@ function isVideo(url: string): boolean {
 // cdn.discordapp.com doesn't support ?format=, media.discordapp.net does
 function makeVideoThumbnail(url: string): string {
     if (!url) return url;
+    const cached = thumbCache.get(url);
+    if (cached) return cached;
     try {
         const u = new URL(url);
         if (u.hostname === "cdn.discordapp.com") u.hostname = "media.discordapp.net";
         if (u.hostname.includes("media.discordapp.net") || u.hostname.includes("images-ext")) {
             u.searchParams.set("format", "jpeg");
-            return u.toString();
+            const result = u.toString();
+            thumbCache.set(url, result);
+            return result;
         }
     } catch {}
     return url;
@@ -111,13 +116,12 @@ function patchMobileFavorites() {
     mod.useFavoriteGIFsMobile = function (...args: any[]) {
         const result = (origUseFavoriteGIFsMobile as Function).apply(this, args);
         if (result?.favorites && Array.isArray(result.favorites)) {
-            result.favorites = result.favorites.map((item: any) => {
-                if (!item) return item;
+            for (const item of result.favorites) {
+                if (!item) continue;
                 if (isVideo(item.url) || isVideo(item.src)) {
-                    return { ...item, src: makeVideoThumbnail(item.src || item.url) };
+                    item.src = makeVideoThumbnail(item.src || item.url);
                 }
-                return item;
-            });
+            }
         }
         return result;
     };
@@ -158,5 +162,6 @@ export default {
             origUseFavoriteGIFsMobile = null;
             favMobileModule = null;
         }
+        thumbCache.clear();
     },
 };
