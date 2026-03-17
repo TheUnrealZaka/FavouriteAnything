@@ -16,32 +16,21 @@ let origUseFavoriteGIFsMobile: Function | null = null;
 let favMobileModule: any = null;
 
 const VIDEO_EXT = [".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v", ".gifv"];
-const thumbCache = new Map<string, string>();
+const processed = new WeakSet<object>();
 
 function isVideo(url: string): boolean {
     if (!url) return false;
-    try {
-        return VIDEO_EXT.some(e => new URL(url).pathname.toLowerCase().endsWith(e));
-    } catch {
-        return VIDEO_EXT.some(e => url.toLowerCase().split("?")[0].endsWith(e));
-    }
+    const path = url.split("?")[0].toLowerCase();
+    return VIDEO_EXT.some(e => path.endsWith(e));
 }
 
 // cdn.discordapp.com doesn't support ?format=, media.discordapp.net does
 function makeVideoThumbnail(url: string): string {
     if (!url) return url;
-    const cached = thumbCache.get(url);
-    if (cached) return cached;
-    try {
-        const u = new URL(url);
-        if (u.hostname === "cdn.discordapp.com") u.hostname = "media.discordapp.net";
-        if (u.hostname.includes("media.discordapp.net") || u.hostname.includes("images-ext")) {
-            u.searchParams.set("format", "jpeg");
-            const result = u.toString();
-            thumbCache.set(url, result);
-            return result;
-        }
-    } catch {}
+    let out = url.replace("cdn.discordapp.com", "media.discordapp.net");
+    if (out.includes("media.discordapp.net") || out.includes("images-ext")) {
+        return out + (out.includes("?") ? "&" : "?") + "format=jpeg";
+    }
     return url;
 }
 
@@ -113,11 +102,14 @@ function patchMobileFavorites() {
     favMobileModule = mod;
     origUseFavoriteGIFsMobile = mod.useFavoriteGIFsMobile;
 
+    let lastFavs: any = null;
     mod.useFavoriteGIFsMobile = function (...args: any[]) {
         const result = (origUseFavoriteGIFsMobile as Function).apply(this, args);
-        if (result?.favorites && Array.isArray(result.favorites)) {
+        if (result?.favorites && Array.isArray(result.favorites) && result.favorites !== lastFavs) {
+            lastFavs = result.favorites;
             for (const item of result.favorites) {
-                if (!item) continue;
+                if (!item || processed.has(item)) continue;
+                processed.add(item);
                 if (isVideo(item.url) || isVideo(item.src)) {
                     item.src = makeVideoThumbnail(item.src || item.url);
                 }
@@ -162,6 +154,5 @@ export default {
             origUseFavoriteGIFsMobile = null;
             favMobileModule = null;
         }
-        thumbCache.clear();
     },
 };
